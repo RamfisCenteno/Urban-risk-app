@@ -3,11 +3,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 
 export default function OnboardingScreen() {
-  const handleStart = async () => {
-    await AsyncStorage.setItem('hasSeenOnboarding', 'true');
-    router.replace('/(tabs)');
-  };
-
+const handleStart = async () => {
+  await AsyncStorage.setItem('hasSeenOnboarding', 'true');
+  router.replace({ pathname: '/(tabs)' });
+};
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Urban Risk</Text>

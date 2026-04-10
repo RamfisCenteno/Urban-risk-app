@@ -1,5 +1,5 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, router, useSegments } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider} from '@react-navigation/native';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
@@ -14,41 +14,33 @@ export const unstable_settings = {
 };
 
 function RootNavigator() {
-  const segments = useSegments();
   const [isReady, setIsReady] = useState(false);
+  const [destination, setDestination] = useState<'/(tabs)' | '/onboarding' | null>(null);
 
+  // Paso 1: leer AsyncStorage una sola vez
   useEffect(() => {
     const checkOnboarding = async () => {
-      const hasSeenOnboarding = await AsyncStorage.getItem('hasSeenOnboarding');
-
-      const firstSegment = String(segments[0] ?? '');
-
-      const inTabs = firstSegment === '(tabs)';
-      const inOnboarding = firstSegment === 'onboarding';
-      const inSelectLocation = firstSegment === 'select-location';
-
-      if (!hasSeenOnboarding && !inOnboarding) {
-        router.replace('./onboarding');
-      } else if (hasSeenOnboarding && !inTabs && !inOnboarding && !inSelectLocation) {
-        router.replace('/(tabs)');
+      try {
+        const value = await AsyncStorage.getItem('hasSeenOnboarding');
+        console.log('hasSeenOnboarding:', value);
+        setDestination(value ? '/(tabs)' : '/onboarding');
+      } catch (e) {
+        console.error('AsyncStorage error:', e);
+        setDestination('/onboarding');
       }
-
-      setIsReady(true);
     };
 
     checkOnboarding();
-  }, [segments]);
+  }, []);
 
-  if (!isReady) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0f172a' }}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
-    );
-  }
+  // Paso 2: navegar solo cuando el Stack esté montado y tengamos destino
+  useEffect(() => {
+    if (!isReady || !destination) return;
+    router.replace({ pathname: destination });
+  }, [isReady, destination]);
 
- return (
-    <Stack>
+  return (
+    <Stack onLayout={() => setIsReady(true)}>
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
