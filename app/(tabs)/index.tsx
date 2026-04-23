@@ -8,7 +8,7 @@ import {
   Pressable,
   ScrollView,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, Heatmap } from 'react-native-maps';
 import { useFocusEffect } from 'expo-router';
 import { supabase } from '../../utils/supabase';
 
@@ -26,6 +26,7 @@ type Incident = {
 
 type DateRangeFilter = 'all' | 'week' | 'month' | '3months' | 'year';
 type FilterKey = 'incidentType' | 'severity' | 'dateRange';
+type MapMode = 'points' | 'heatmap';
 
 type FilterOption = {
   label: string;
@@ -46,26 +47,18 @@ const DATE_OPTIONS: FilterOption[] = [
   { label: 'Último año', value: 'year' },
 ];
 
+const normalizeText = (value: string | null | undefined) =>
+  (value || '').trim().toLowerCase();
+
 function getStartDate(range: DateRangeFilter): Date | null {
   const now = new Date();
   const start = new Date(now);
-
   switch (range) {
-    case 'week':
-      start.setDate(now.getDate() - 7);
-      return start;
-    case 'month':
-      start.setMonth(now.getMonth() - 1);
-      return start;
-    case '3months':
-      start.setMonth(now.getMonth() - 3);
-      return start;
-    case 'year':
-      start.setFullYear(now.getFullYear() - 1);
-      return start;
-    case 'all':
-    default:
-      return null;
+    case 'week': start.setDate(now.getDate() - 7); return start;
+    case 'month': start.setMonth(now.getMonth() - 1); return start;
+    case '3months': start.setMonth(now.getMonth() - 3); return start;
+    case 'year': start.setFullYear(now.getFullYear() - 1); return start;
+    default: return null;
   }
 }
 
@@ -73,223 +66,175 @@ function getSelectedLabel(options: FilterOption[], value: string) {
   return options.find((option) => option.value === value)?.label || 'Todo';
 }
 
+function getIncidentColor(type: string) {
+  switch (normalizeText(type)) {
+    case 'robo': return '#ef4444';
+    case 'intento de robo': return '#f97316';
+    case 'acoso': return '#a855f7';
+    case 'violencia': return '#111827';
+    case 'actividad sospechosa': return '#eab308';
+    case 'zona insegura': return '#2563eb';
+    default: return '#6b7280';
+  }
+}
 
-const normalizeText = (value: string | null | undefined) =>
-  (value || '').trim().toLowerCase();
-
+function buildHeatmapGradient(selectedType: string) {
+  if (normalizeText(selectedType) === 'all') {
+    return { colors: ['#93c5fd', '#3b82f6', '#1d4ed8'], startPoints: [0.2, 0.6, 1], colorMapSize: 256 };
+  }
+  const color = getIncidentColor(selectedType);
+  return { colors: ['#ffffff00', color, color], startPoints: [0.2, 0.6, 1], colorMapSize: 256 };
+}
 
 export default function MapScreen() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(false);
-
-  const [filters, setFilters] = useState<Filters>({
-    incidentType: 'all',
-    severity: 'all',
-    dateRange: 'all',
-  });
-
+  const [mapMode, setMapMode] = useState<MapMode>('points');
+  const [filters, setFilters] = useState<Filters>({ incidentType: 'all', severity: 'all', dateRange: 'all' });
   const [openFilter, setOpenFilter] = useState<FilterKey | null>(null);
 
   const fetchIncidents = async () => {
     setLoading(true);
-
     const { data, error } = await supabase
       .from('incidents')
       .select('*')
       .order('created_at', { ascending: false });
-
-    if (error) {
-      console.log('Error cargando incidentes en mapa:', error);
-      setLoading(false);
-      return;
-    }
-
+    if (error) { console.log('Error cargando incidentes:', error); setLoading(false); return; }
     setIncidents(data || []);
     setLoading(false);
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchIncidents();
-    }, [])
-  );
+  useFocusEffect(useCallback(() => { fetchIncidents(); }, []));
 
   const incidentTypeOptions = useMemo<FilterOption[]>(() => {
-    const uniqueTypes = [...new Set(incidents.map((item) => item.incident_type).filter(Boolean))];
-    return [
-      { label: 'Todo', value: 'all' },
-      ...uniqueTypes.map((type) => ({
-        label: type,
-        value: type,
-      })),
-    ];
+    const uniqueTypes = [...new Set(incidents.map((i) => i.incident_type).filter(Boolean))];
+    return [{ label: 'Todo', value: 'all' }, ...uniqueTypes.map((t) => ({ label: t, value: t }))];
   }, [incidents]);
 
   const severityOptions = useMemo<FilterOption[]>(() => {
-      const uniqueSeverities = [...new Set(incidents.map((item) => item.severity).filter(Boolean))];
-
-      return [
-        { label: 'Todo', value: 'all' },
-        ...uniqueSeverities.map((severity) => ({
-          label: severity,
-          value: severity,
-        })),
-      ];
-    }, [incidents]);
+    const uniqueSeverities = [...new Set(incidents.map((i) => i.severity).filter(Boolean))];
+    return [{ label: 'Todo', value: 'all' }, ...uniqueSeverities.map((s) => ({ label: s, value: s }))];
+  }, [incidents]);
 
   const filteredIncidents = useMemo(() => {
     const startDate = getStartDate(filters.dateRange);
-
     return incidents.filter((incident) => {
-      const incidentType = normalizeText(incident.incident_type);
-      const incidentSeverity = normalizeText(incident.severity);
-      const selectedType = normalizeText(filters.incidentType);
-      const selectedSeverity = normalizeText(filters.severity);
-
-      const matchesType =
-        selectedType === 'all' || incidentType === selectedType;
-
-      const matchesSeverity =
-        selectedSeverity === 'all' || incidentSeverity === selectedSeverity;
-
-      const createdAt = new Date(incident.created_at);
-      const matchesDate = !startDate || createdAt >= startDate;
-
+      const matchesType = normalizeText(filters.incidentType) === 'all' || normalizeText(incident.incident_type) === normalizeText(filters.incidentType);
+      const matchesSeverity = normalizeText(filters.severity) === 'all' || normalizeText(incident.severity) === normalizeText(filters.severity);
+      const matchesDate = !startDate || new Date(incident.created_at) >= startDate;
       return matchesType && matchesSeverity && matchesDate;
     });
   }, [incidents, filters]);
 
+  const heatmapPoints = useMemo(() =>
+    filteredIncidents.map((i) => ({ latitude: i.latitude, longitude: i.longitude, weight: 1 })),
+  [filteredIncidents]);
+
   const currentOptions =
-    openFilter === 'incidentType'
-      ? incidentTypeOptions
-      : openFilter === 'severity'
-      ? severityOptions
-      : DATE_OPTIONS;
+    openFilter === 'incidentType' ? incidentTypeOptions :
+    openFilter === 'severity' ? severityOptions : DATE_OPTIONS;
 
   const handleSelectOption = (value: string) => {
     if (!openFilter) return;
-
-    setFilters((prev) => ({
-      ...prev,
-      [openFilter]: value,
-    }));
-
+    setFilters((prev) => ({ ...prev, [openFilter]: value }));
     setOpenFilter(null);
   };
 
   return (
     <View style={styles.container}>
-      <MapView
-        style={styles.map}
-        initialRegion={{
-          latitude: -12.09,
-          longitude: -77.04,
-          latitudeDelta: 0.03,
-          longitudeDelta: 0.03,
-        }}
-      >
-        {filteredIncidents.map((incident) => (
-          <Marker
-            key={incident.id}
-            coordinate={{
-              latitude: incident.latitude,
-              longitude: incident.longitude,
-            }}
-            title={incident.title}
-            description={incident.description || 'Sin descripción'}
-          />
-        ))}
-      </MapView>
 
- <View style={styles.filtersContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filtersRow}
-        >
+      {/* ── BARRA DE FILTROS (arriba) ── */}
+      <View style={styles.filtersContainer}>
+
+        {/* Fila superior: toggle + botón actualizar */}
+        <View style={styles.filterTopRow}>
+          <View style={styles.toggleWrapper}>
+            <TouchableOpacity
+              style={[styles.toggleOption, mapMode === 'points' && styles.toggleOptionActive]}
+              onPress={() => setMapMode('points')}
+            >
+              <Text style={[styles.toggleText, mapMode === 'points' && styles.toggleTextActive]}>Puntos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toggleOption, mapMode === 'heatmap' && styles.toggleOptionActive]}
+              onPress={() => setMapMode('heatmap')}
+            >
+              <Text style={[styles.toggleText, mapMode === 'heatmap' && styles.toggleTextActive]}>Calor</Text>
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setOpenFilter('incidentType')}
+            style={[styles.refreshButton, loading && styles.refreshButtonDisabled]}
+            onPress={fetchIncidents}
+            disabled={loading}
           >
-            <Text style={styles.filterTitle}>Tipo</Text>
-            <Text style={styles.filterValue}>
-              {getSelectedLabel(incidentTypeOptions, filters.incidentType)}
-            </Text>
+            <Text style={styles.refreshButtonText}>{loading ? 'Actualizando...' : 'Actualizar'}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Chips de filtros */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+          <TouchableOpacity style={styles.filterChip} onPress={() => setOpenFilter('incidentType')}>
+            <Text style={styles.filterChipLabel}>Tipo · </Text>
+            <Text style={styles.filterChipValue}>{getSelectedLabel(incidentTypeOptions, filters.incidentType)}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setOpenFilter('severity')}
-          >
-            <Text style={styles.filterTitle}>Gravedad</Text>
-            <Text style={styles.filterValue}>
-              {getSelectedLabel(severityOptions, filters.severity)}
-            </Text>
+          <TouchableOpacity style={styles.filterChip} onPress={() => setOpenFilter('severity')}>
+            <Text style={styles.filterChipLabel}>Gravedad · </Text>
+            <Text style={styles.filterChipValue}>{getSelectedLabel(severityOptions, filters.severity)}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setOpenFilter('dateRange')}
-          >
-            <Text style={styles.filterTitle}>Fecha</Text>
-            <Text style={styles.filterValue}>
-              {getSelectedLabel(DATE_OPTIONS, filters.dateRange)}
-            </Text>
+          <TouchableOpacity style={styles.filterChip} onPress={() => setOpenFilter('dateRange')}>
+            <Text style={styles.filterChipLabel}>Fecha · </Text>
+            <Text style={styles.filterChipValue}>{getSelectedLabel(DATE_OPTIONS, filters.dateRange)}</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
 
-      <TouchableOpacity
-        style={[styles.refreshButton, loading && styles.refreshButtonDisabled]}
-        onPress={fetchIncidents}
-        disabled={loading}
-      >
-        <Text style={styles.refreshButtonText}>
-          {loading ? 'Actualizando...' : 'Actualizar'}
-        </Text>
-      </TouchableOpacity>
+      {/* ── MAPA (abajo, ocupa el resto) ── */}
+      <View style={styles.mapContainer}>
+        <MapView
+          style={styles.map}
+          initialRegion={{ latitude: -12.09, longitude: -77.04, latitudeDelta: 0.03, longitudeDelta: 0.03 }}
+        >
+          {mapMode === 'points' && filteredIncidents.map((incident) => (
+            <Marker
+              key={incident.id}
+              coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
+              title={incident.incident_type}
+            >
+              <View style={[styles.dotMarker, { backgroundColor: getIncidentColor(incident.incident_type) }]} />
+            </Marker>
+          ))}
 
+          {mapMode === 'heatmap' && heatmapPoints.length > 0 && (
+            <Heatmap points={heatmapPoints} radius={10} opacity={0.5} gradient={buildHeatmapGradient(filters.incidentType)} />
+          )}
+        </MapView>
 
-      {!loading && filteredIncidents.length === 0 && (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyText}>
-            {incidents.length === 0
-              ? 'Aún no hay reportes para mostrar.'
-              : 'No hay reportes con los filtros elegidos.'}
-          </Text>
-        </View>
-      )}
+        {!loading && filteredIncidents.length === 0 && (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyText}>
+              {incidents.length === 0 ? 'Aún no hay reportes para mostrar.' : 'No hay reportes con los filtros elegidos.'}
+            </Text>
+          </View>
+        )}
+      </View>
 
-  <Modal
-        visible={openFilter !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setOpenFilter(null)}
-      >
+      {/* ── MODAL DE FILTROS ── */}
+      <Modal visible={openFilter !== null} transparent animationType="fade" onRequestClose={() => setOpenFilter(null)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setOpenFilter(null)}>
           <Pressable style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              {openFilter === 'incidentType'
-                ? 'Selecciona un tipo'
-                : openFilter === 'severity'
-                ? 'Selecciona una gravedad'
-                : 'Selecciona una fecha'}
+              {openFilter === 'incidentType' ? 'Selecciona un tipo' :
+               openFilter === 'severity' ? 'Selecciona una gravedad' : 'Selecciona una fecha'}
             </Text>
-
             {currentOptions.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={styles.optionButton}
-                onPress={() => handleSelectOption(option.value)}
-              >
+              <TouchableOpacity key={option.value} style={styles.optionButton} onPress={() => handleSelectOption(option.value)}>
                 <Text style={styles.optionText}>{option.label}</Text>
               </TouchableOpacity>
             ))}
-
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setOpenFilter(null)}
-            >
+            <TouchableOpacity style={styles.closeButton} onPress={() => setOpenFilter(null)}>
               <Text style={styles.closeButtonText}>Cerrar</Text>
             </TouchableOpacity>
           </Pressable>
@@ -303,56 +248,94 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    flexDirection: 'column',
   },
-  map: {
-    width: '100%',
-    height: '100%',
-  },
+
+  // ── Filtros ──
   filtersContainer: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
-  },
-  filtersRow: {
-    paddingRight: 8,
-    gap: 8,
-  },
-  filterButton: {
     backgroundColor: '#ffffff',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+    elevation: 4,
+  },
+  filterTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  toggleWrapper: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f4f6',
     borderRadius: 12,
-    minWidth: 110,
-    elevation: 3,
+    padding: 3,
   },
-  filterTitle: {
-    fontSize: 11,
-    color: '#6b7280',
-    marginBottom: 2,
+  toggleOption: {
+    paddingVertical: 7,
+    paddingHorizontal: 18,
+    borderRadius: 10,
   },
-  filterValue: {
+  toggleOptionActive: {
+    backgroundColor: '#111827',
+  },
+  toggleText: {
     fontSize: 13,
     fontWeight: '600',
+    color: '#6b7280',
+  },
+  toggleTextActive: {
+    color: '#ffffff',
+  },
+  filtersRow: {
+    gap: 8,
+    paddingRight: 8,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+  },
+  filterChipLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+  },
+  filterChipValue: {
+    fontSize: 12,
+    fontWeight: '700',
     color: '#111827',
   },
   refreshButton: {
-    position: 'absolute',
-    top: 78,
-    right: 16,
     backgroundColor: '#111827',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 12,
-    elevation: 3,
   },
   refreshButtonDisabled: {
     opacity: 0.7,
   },
   refreshButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
+  },
+
+  // ── Mapa ──
+  mapContainer: {
+    flex: 1,
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  dotMarker: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   emptyBox: {
     position: 'absolute',
@@ -367,6 +350,8 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
   },
+
+  // ── Modal ──
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.35)',

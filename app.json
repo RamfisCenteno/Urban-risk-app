@@ -19,7 +19,13 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.kndrd233.urbanriskapp",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyC6HOtIQDeTX_k1jJMSqqjj3dgpkp62698"
+        }
+      }
     },
     "web": {
       "output": "static",
@@ -44,6 +50,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3586370a-8358-4774-84b9-6bd732ec77ff"
+      }
     }
   }
 }
