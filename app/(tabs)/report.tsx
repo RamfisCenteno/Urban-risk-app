@@ -11,6 +11,7 @@ import { router } from 'expo-router';
 import { supabase } from '../../utils/supabase';
 import { useReportDraft } from '../../context/report-draft-context';
 import { useState } from 'react';
+import { getOrCreateReporterId } from '../../utils/reporter-id';
 
 
 const INCIDENT_OPTIONS = [
@@ -52,6 +53,8 @@ export default function ReportScreen() {
     setLoading(true);
 
     const title = `Reporte de ${draft.incidentType.trim()}`;
+    const reporterId = await getOrCreateReporterId();
+
 
     const { error } = await supabase.from('incidents').insert([
       {
@@ -63,6 +66,7 @@ export default function ReportScreen() {
         address: draft.address || null,
         latitude: draft.latitude,
         longitude: draft.longitude,
+        reporter_id : reporterId, 
       },
     ]);
 

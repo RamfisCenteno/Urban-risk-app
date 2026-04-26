@@ -11,6 +11,9 @@ import {
 import MapView, { Marker, Heatmap } from 'react-native-maps';
 import { useFocusEffect } from 'expo-router';
 import { supabase } from '../../utils/supabase';
+import { getOrCreateReporterId } from '../../utils/reporter-id';
+
+
 
 type Incident = {
   id: number;
@@ -22,6 +25,7 @@ type Incident = {
   latitude: number;
   longitude: number;
   created_at: string;
+  reporter_id: string | null;
 };
 
 type DateRangeFilter = 'all' | 'week' | 'month' | '3months' | 'year';
@@ -37,6 +41,7 @@ type Filters = {
   incidentType: string;
   severity: string;
   dateRange: DateRangeFilter;
+  ownOnly: boolean;
 };
 
 const DATE_OPTIONS: FilterOption[] = [
@@ -46,6 +51,25 @@ const DATE_OPTIONS: FilterOption[] = [
   { label: 'Últimos 3 meses', value: '3months' },
   { label: 'Último año', value: 'year' },
 ];
+
+const LEGEND_ITEMS = [
+  'Robo',
+  'Intento de robo',
+  'Acoso',
+  'Violencia',
+  'Actividad sospechosa',
+  'Zona insegura',
+];
+
+
+const INITIAL_FILTERS: Filters = {
+  incidentType: 'all',
+  severity: 'all',
+  dateRange: 'all',
+  ownOnly: false,
+};
+
+
 
 const normalizeText = (value: string | null | undefined) =>
   (value || '').trim().toLowerCase();
@@ -90,8 +114,10 @@ export default function MapScreen() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>('points');
-  const [filters, setFilters] = useState<Filters>({ incidentType: 'all', severity: 'all', dateRange: 'all' });
+  const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
   const [openFilter, setOpenFilter] = useState<FilterKey | null>(null);
+  const [currentReporterId, setCurrentReporterId] = useState<string | null>(null);
+
 
   const fetchIncidents = async () => {
     setLoading(true);
@@ -104,7 +130,17 @@ export default function MapScreen() {
     setLoading(false);
   };
 
-  useFocusEffect(useCallback(() => { fetchIncidents(); }, []));
+  useFocusEffect(
+  useCallback(() => {
+    const loadData = async () => {
+      const reporterId = await getOrCreateReporterId();
+      setCurrentReporterId(reporterId);
+      await fetchIncidents();
+    };
+
+    loadData();
+  }, [])
+);
 
   const incidentTypeOptions = useMemo<FilterOption[]>(() => {
     const uniqueTypes = [...new Set(incidents.map((i) => i.incident_type).filter(Boolean))];
@@ -122,9 +158,13 @@ export default function MapScreen() {
       const matchesType = normalizeText(filters.incidentType) === 'all' || normalizeText(incident.incident_type) === normalizeText(filters.incidentType);
       const matchesSeverity = normalizeText(filters.severity) === 'all' || normalizeText(incident.severity) === normalizeText(filters.severity);
       const matchesDate = !startDate || new Date(incident.created_at) >= startDate;
-      return matchesType && matchesSeverity && matchesDate;
+      const matchesOwnOnly =
+        !filters.ownOnly || incident.reporter_id === currentReporterId;
+
+      return matchesType && matchesSeverity && matchesDate && matchesOwnOnly;
+
     });
-  }, [incidents, filters]);
+  }, [incidents, filters, currentReporterId]);
 
   const heatmapPoints = useMemo(() =>
     filteredIncidents.map((i) => ({ latitude: i.latitude, longitude: i.longitude, weight: 1 })),
@@ -188,6 +228,36 @@ export default function MapScreen() {
             <Text style={styles.filterChipLabel}>Fecha · </Text>
             <Text style={styles.filterChipValue}>{getSelectedLabel(DATE_OPTIONS, filters.dateRange)}</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              filters.ownOnly && styles.filterChipActive,
+            ]}
+            onPress={() =>
+              setFilters((prev) => ({
+                ...prev,
+                ownOnly: !prev.ownOnly,
+              }))
+            }
+          >
+            <Text
+              style={[
+                styles.filterChipValue,
+                filters.ownOnly && styles.filterChipValueActive,
+              ]}
+            >
+              Mis reportes
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.clearFilterChip}
+            onPress={() => setFilters(INITIAL_FILTERS)}
+          >
+            <Text style={styles.clearFilterChipText}>Limpiar</Text>
+          </TouchableOpacity>
+
         </ScrollView>
       </View>
 
@@ -211,6 +281,25 @@ export default function MapScreen() {
             <Heatmap points={heatmapPoints} radius={10} opacity={0.5} gradient={buildHeatmapGradient(filters.incidentType)} />
           )}
         </MapView>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.legendContent}
+          style={styles.legendWrapper}
+        >
+          {LEGEND_ITEMS.map((item) => (
+            <View key={item} style={styles.legendItem}>
+              <View
+                style={[
+                  styles.legendDot,
+                  { backgroundColor: getIncidentColor(item) },
+                ]}
+              />
+              <Text style={styles.legendText}>{item}</Text>
+            </View>
+          ))}
+        </ScrollView>
 
         {!loading && filteredIncidents.length === 0 && (
           <View style={styles.emptyBox}>
@@ -339,7 +428,7 @@ const styles = StyleSheet.create({
   },
   emptyBox: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 84,
     alignSelf: 'center',
     backgroundColor: 'rgba(17, 24, 39, 0.85)',
     paddingVertical: 10,
@@ -389,4 +478,54 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
   },
+  filterChipActive: {
+    backgroundColor: '#dbeafe',
+  },
+  filterChipValueActive: {
+    color: '#1d4ed8',
+  },
+  clearFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+  },
+  clearFilterChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  legendWrapper: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 20,
+    maxHeight: 52,
+    backgroundColor: 'rgba(17, 24, 39, 0.9)',
+    borderRadius: 16,
+  },
+  legendContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    gap: 14,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    marginRight: 6,
+  },
+  legendText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
 });
